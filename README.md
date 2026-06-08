@@ -1,6 +1,6 @@
 # libabigail-action
 
-[![ci](https://github.com/fujitatomoya/libabigail-action/actions/workflows/ci.yml/badge.svg)](https://github.com/fujitatomoya/libabigail-action/actions/workflows/ci.yml)
+[![ci](https://github.com/fujitatomoya/libabigail-action/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/fujitatomoya/libabigail-action/actions/workflows/ci.yml?query=branch%3Amain)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 A reusable GitHub Action that detects **ABI-breaking changes** in C/C++ shared libraries on every pull request, using [libabigail](https://sourceware.org/libabigail/)'s `abidiff`.
