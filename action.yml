@@ -1,0 +1,173 @@
+name: 'libabigail ABI check'
+description: 'Diff two pre-built shared libraries with libabigail and report ABI compliance on the pull request.'
+author: 'fujitatomoya'
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  base-lib:
+    description: 'Path to the baseline shared library (must be built with -g for DWARF).'
+    required: true
+  head-lib:
+    description: 'Path to the PR-built shared library (must be built with -g for DWARF).'
+    required: true
+  suppressions:
+    description: 'Path to a libabigail suppression spec file (e.g. .abignore).'
+    required: false
+    default: ''
+  headers-dir-base:
+    description: 'Optional public-headers directory for the baseline; filters the ABI surface.'
+    required: false
+    default: ''
+  headers-dir-head:
+    description: 'Optional public-headers directory for the head build; filters the ABI surface.'
+    required: false
+    default: ''
+  fail-on:
+    description: 'Verdict severity that should fail the job: none | addition | change | incompatible.'
+    required: false
+    default: 'incompatible'
+  comment-pr:
+    description: 'Post / update a sticky comment on the pull request with the verdict.'
+    required: false
+    default: 'true'
+  label-compat:
+    description: 'Label to apply when the verdict is compatible or additions-only.'
+    required: false
+    default: ''
+  label-break:
+    description: 'Label to apply when the verdict is incompatible.'
+    required: false
+    default: ''
+  report-name:
+    description: 'Artifact name for the full abidiff report.'
+    required: false
+    default: 'abidiff-report'
+  abidiff-extra-args:
+    description: 'Extra arguments passed verbatim to abidiff.'
+    required: false
+    default: ''
+  marker-suffix:
+    description: 'Suffix for the sticky-comment HTML marker; lets multiple ABI checks coexist on one PR.'
+    required: false
+    default: 'abi-check'
+  github-token:
+    description: 'Token used to read/write PR comments and labels. Defaults to the workflow token.'
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  exit-code:
+    description: 'Raw abidiff bitmap exit code.'
+    value: ${{ steps.run.outputs.abidiff-exit }}
+  verdict:
+    description: 'compatible | additions-only | incompatible | error.'
+    value: ${{ steps.decode.outputs.verdict }}
+  report:
+    description: 'Path to the full abidiff text report (also uploaded as an artifact).'
+    value: ${{ steps.run.outputs.report-path }}
+  summary:
+    description: 'One-line human-readable verdict summary.'
+    value: ${{ steps.decode.outputs.summary }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Ensure libabigail is installed
+      shell: bash
+      run: |
+        if command -v abidiff >/dev/null 2>&1; then
+          echo "abidiff already available: $(command -v abidiff)"
+        else
+          if ! command -v apt-get >/dev/null 2>&1; then
+            echo "::error::abidiff is not available and apt-get is missing. Install libabigail in your runner image."
+            exit 1
+          fi
+          SUDO=""
+          if [[ $EUID -ne 0 ]]; then SUDO="sudo"; fi
+          $SUDO apt-get update -qq
+          # Debian 12+ / Ubuntu 24.04+ ship the binaries as 'abigail-tools';
+          # older releases used 'libabigail-tools'. Try the new name first.
+          for pkg in abigail-tools libabigail-tools; do
+            echo "Attempting to install $pkg..."
+            if $SUDO DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$pkg"; then
+              installed="$pkg"
+              break
+            fi
+          done
+          if [[ -z "${installed:-}" ]]; then
+            echo "::error::Could not install abigail-tools or libabigail-tools via apt."
+            exit 1
+          fi
+        fi
+        abidiff --version
+
+    - name: Run abidiff
+      id: run
+      shell: bash
+      env:
+        BASE_LIB: ${{ inputs.base-lib }}
+        HEAD_LIB: ${{ inputs.head-lib }}
+        SUPPRESSIONS: ${{ inputs.suppressions }}
+        HEADERS_DIR_BASE: ${{ inputs.headers-dir-base }}
+        HEADERS_DIR_HEAD: ${{ inputs.headers-dir-head }}
+        FAIL_ON: ${{ inputs.fail-on }}
+        EXTRA_ARGS: ${{ inputs.abidiff-extra-args }}
+        REPORT_PATH: ${{ runner.temp }}/abidiff-report.txt
+      run: bash "$GITHUB_ACTION_PATH/scripts/run-abidiff.sh"
+
+    - name: Decode verdict
+      id: decode
+      shell: bash
+      env:
+        ABIDIFF_EXIT: ${{ steps.run.outputs.abidiff-exit }}
+        FAIL_ON: ${{ inputs.fail-on }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/decode-verdict.sh"
+
+    - name: Upload abidiff report artifact
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.report-name }}
+        path: ${{ steps.run.outputs.report-path }}
+        if-no-files-found: warn
+
+    - name: Comment on PR and update labels
+      if: ${{ github.event_name == 'pull_request' || github.event_name == 'pull_request_target' }}
+      uses: actions/github-script@v7
+      env:
+        VERDICT: ${{ steps.decode.outputs.verdict }}
+        SUMMARY: ${{ steps.decode.outputs.summary }}
+        REPORT_PATH: ${{ steps.run.outputs.report-path }}
+        BASE_LIB: ${{ inputs.base-lib }}
+        HEAD_LIB: ${{ inputs.head-lib }}
+        SUPPRESSIONS: ${{ inputs.suppressions }}
+        MARKER_SUFFIX: ${{ inputs.marker-suffix }}
+        LABEL_COMPAT: ${{ inputs.label-compat }}
+        LABEL_BREAK: ${{ inputs.label-break }}
+        COMMENT_PR: ${{ inputs.comment-pr }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const fs = require('fs');
+          const reportPath = process.env.REPORT_PATH;
+          process.env.REPORT = fs.existsSync(reportPath)
+            ? fs.readFileSync(reportPath, 'utf8')
+            : '';
+          const fn = require(`${process.env.GITHUB_ACTION_PATH}/scripts/post-comment.js`);
+          await fn({ github, context, core });
+
+    - name: Enforce fail-on policy
+      shell: bash
+      env:
+        SHOULD_FAIL: ${{ steps.decode.outputs.should-fail }}
+        VERDICT: ${{ steps.decode.outputs.verdict }}
+        SUMMARY: ${{ steps.decode.outputs.summary }}
+      run: |
+        echo "ABI verdict: $VERDICT"
+        echo "Summary:     $SUMMARY"
+        if [[ "$SHOULD_FAIL" == "true" ]]; then
+          echo "::error::ABI check failed (verdict=$VERDICT). $SUMMARY"
+          exit 1
+        fi

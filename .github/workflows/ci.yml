@@ -1,0 +1,145 @@
+# Self-test: build the three fixture .so files and run the action against
+# each pair to verify all three verdicts are produced correctly.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends shellcheck
+          shellcheck scripts/*.sh
+
+  fixtures-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build deps
+        run: |
+          sudo apt-get update -qq
+          # 'libabigail-tools' was renamed to 'abigail-tools' on Debian 12+ /
+          # Ubuntu 24.04+. Prefer the new name, fall back for older runners.
+          if ! sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential abigail-tools; then
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential libabigail-tools
+          fi
+      - name: Build fixtures
+        working-directory: test/fixtures
+        run: make
+      - name: Verify libraries contain DWARF
+        working-directory: test/fixtures
+        run: |
+          for f in build/libfoo-v1.so build/libfoo-v2.so build/libfoo-v3.so; do
+            test -f "$f"
+            readelf -S "$f" | grep -q '\.debug_info'
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fixtures
+          path: test/fixtures/build/
+
+  verdict-compatible:
+    needs: fixtures-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: fixtures
+          path: build/
+      - name: Run libabigail-action (v1 vs v1)
+        id: abi
+        uses: ./
+        with:
+          base-lib: build/libfoo-v1.so
+          head-lib: build/libfoo-v1.so
+          fail-on: incompatible
+          comment-pr: 'false'
+          report-name: abidiff-report-compatible
+      - name: Assert verdict == compatible
+        run: |
+          test "${{ steps.abi.outputs.verdict }}" = "compatible"
+
+  verdict-additions-only:
+    needs: fixtures-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: fixtures
+          path: build/
+      - name: Run libabigail-action (v1 vs v2)
+        id: abi
+        uses: ./
+        with:
+          base-lib: build/libfoo-v1.so
+          head-lib: build/libfoo-v2.so
+          fail-on: incompatible
+          comment-pr: 'false'
+          report-name: abidiff-report-additions
+      - name: Assert verdict == additions-only
+        run: |
+          test "${{ steps.abi.outputs.verdict }}" = "additions-only"
+
+  verdict-incompatible:
+    needs: fixtures-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: fixtures
+          path: build/
+      - name: Run libabigail-action (v1 vs v3, fail-on=none)
+        id: abi
+        uses: ./
+        with:
+          base-lib: build/libfoo-v1.so
+          head-lib: build/libfoo-v3.so
+          fail-on: none
+          comment-pr: 'false'
+          report-name: abidiff-report-incompatible
+      - name: Assert verdict == incompatible
+        run: |
+          test "${{ steps.abi.outputs.verdict }}" = "incompatible"
+
+  verdict-incompatible-fails:
+    needs: fixtures-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: fixtures
+          path: build/
+      - name: Run libabigail-action (v1 vs v3, fail-on=incompatible) — expect failure
+        id: abi
+        continue-on-error: true
+        uses: ./
+        with:
+          base-lib: build/libfoo-v1.so
+          head-lib: build/libfoo-v3.so
+          fail-on: incompatible
+          comment-pr: 'false'
+          report-name: abidiff-report-incompatible-fails
+      - name: Assert action step failed and verdict == incompatible
+        run: |
+          if [[ "${{ steps.abi.outcome }}" != "failure" ]]; then
+            echo "Expected the step to fail but outcome was ${{ steps.abi.outcome }}"
+            exit 1
+          fi
+          test "${{ steps.abi.outputs.verdict }}" = "incompatible"

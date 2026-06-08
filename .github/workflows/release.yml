@@ -1,0 +1,51 @@
+# Re-tag the floating major version (e.g. v1) to point at the latest tagged
+# release in that line. Run after creating a new vX.Y.Z release on GitHub.
+name: release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to re-point the major alias at (e.g. v1.2.3).'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  retag-major:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve source tag
+        id: src
+        run: |
+          if [[ -n "${{ github.event.inputs.tag }}" ]]; then
+            tag="${{ github.event.inputs.tag }}"
+          else
+            tag="${{ github.event.release.tag_name }}"
+          fi
+          if [[ ! "$tag" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "::error::Tag '$tag' is not of the form vMAJOR.MINOR.PATCH"
+            exit 1
+          fi
+          major="v${BASH_REMATCH[1]}"
+          echo "tag=$tag"     >> "$GITHUB_OUTPUT"
+          echo "major=$major" >> "$GITHUB_OUTPUT"
+
+      - name: Move major alias tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ steps.src.outputs.tag }}"
+          major="${{ steps.src.outputs.major }}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f "$major" "$tag"
+          git push origin -f "refs/tags/$major"
+          echo "Moved $major -> $tag"

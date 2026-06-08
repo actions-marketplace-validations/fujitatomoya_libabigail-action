@@ -1,0 +1,49 @@
+# Example consumer workflow for libabigail-action.
+#
+# Drop a copy of this into `.github/workflows/abi.yml` in your repository,
+# adjust the build steps to produce your baseline and head .so files, and
+# point base-lib / head-lib at them.
+name: ABI Compliance Check
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write   # comment + label
+  issues: write          # label
+
+jobs:
+  abi:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out PR
+        uses: actions/checkout@v4
+
+      # 1. Build the baseline (target branch) library somewhere.
+      #    Replace this stub with your real build commands; the result must
+      #    be an ELF .so containing DWARF (compiled with -g).
+      - name: Build baseline
+        run: |
+          # e.g. git worktree add /tmp/base origin/${{ github.base_ref }}
+          # cd /tmp/base && cmake -B build -DCMAKE_BUILD_TYPE=Debug && cmake --build build
+          echo "Replace me with your baseline build."
+
+      # 2. Build the PR head library.
+      - name: Build head
+        run: |
+          echo "Replace me with your PR build."
+
+      - name: ABI check
+        uses: fujitatomoya/libabigail-action@v1
+        with:
+          base-lib: /tmp/base/build/libmylib.so
+          head-lib: build/libmylib.so
+          # Optional inputs:
+          # suppressions:     .abignore
+          # headers-dir-base: /tmp/base/include
+          # headers-dir-head: include
+          # fail-on:          incompatible
+          # label-compat:     abi-compatible
+          # label-break:      abi-break
