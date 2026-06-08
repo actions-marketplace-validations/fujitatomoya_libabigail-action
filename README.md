@@ -266,6 +266,19 @@ The `release` workflow re-points the floating `vMAJOR` tag at the latest `vMAJOR
 
 ---
 
+## Why libabigail rather than abi-compliance-checker?
+
+The de-facto alternative for this kind of check is [`abi-compliance-checker`](https://github.com/lvc/abi-compliance-checker) (ABICC), and most existing CI integrations wrap it.
+
+ABICC has been effectively unmaintained for a long time — the upstream repository has seen no substantive release in years — and any tooling built on top of it inherits that staleness: lagging compiler / DWARF support, friction on modern distributions, and accumulating quirks around contemporary C++.
+
+[libabigail](https://sourceware.org/libabigail/) is part of the sourceware.org family (alongside binutils, glibc, and gdb) and is actively maintained, with regular releases that track current toolchains and DWARF revisions.
+It also produces a more CI-friendly output model than ABICC: a documented exit-code bitmap, an explicit "harmful" vs "harmless" change classification, and suppression specs that let projects filter known-benign deltas without forking the tool.
+
+That combination — active upstream maintenance plus a structured, machine-readable verdict — is why this action wraps `abidiff`.
+
+---
+
 ## Non-goals
 
 - **Source-level API compatibility** — `libabigail` is binary ABI only.
